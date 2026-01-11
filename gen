@@ -1,0 +1,89 @@
+import datetime
+import torch
+import diffusers
+from sdnq import SDNQConfig
+from sdnq.loader import apply_sdnq_options_to_model
+
+# ── 设备与基本设置 ──
+device = "mps" if torch.backends.mps.is_available() else "cpu"
+print(f"使用设备: {device}")
+
+print("正在加载模型（第一次会比较慢，请稍等...）\n")
+
+# 加载管道（只执行一次）
+pipe = diffusers.ZImagePipeline.from_pretrained(
+    "Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",
+    torch_dtype=torch.bfloat16,
+)
+
+# 应用 SDNQ 量化（MPS 必须 False）
+pipe.transformer = apply_sdnq_options_to_model(
+    pipe.transformer,
+    use_quantized_matmul=False
+)
+pipe.text_encoder = apply_sdnq_options_to_model(
+    pipe.text_encoder,
+    use_quantized_matmul=False
+)
+
+# MPS 必要优化
+pipe.enable_attention_slicing()
+pipe.enable_model_cpu_offload()
+
+print("模型加载完成！现在可以开始生成图片啦～\n")
+print("提示：输入提示词后按回车即可生成")
+print("输入 'quit' / 'exit' / 'q' 退出程序\n")
+
+# 默认参数（你可以随时在循环里修改）
+negative_prompt = "模糊，畸形，难看，低质量，穿帮，文字，水印，丑陋，畸形手，畸形脸，多余肢体"
+num_steps = 8
+height = 640  # 16*40
+width = 480  # 16*30
+guidance_scale = 0.0
+
+# ── 交互循环 ──
+while True:
+    try:
+        prompt = input("请输入提示词 (或输入 q/exit/quit 退出): ").strip()
+
+        if prompt.lower() in ['quit', 'exit', 'q']:
+            print("感谢使用，再见～")
+            break
+
+        if not prompt:
+            print("提示词不能为空哦～\n")
+            continue
+
+        # 可选：在这里也可以加个输入种子或步数的交互，根据需要打开
+        # seed_input = input("输入种子（直接回车用随机）: ").strip()
+        # seed = int(seed_input) if seed_input.isdigit() else torch.seed()
+
+        seed = 42 + len(prompt) * 17  # 简单让每次提示不同种子，也可以固定或随机
+        generator = torch.manual_seed(seed)
+
+        print(f"\n生成中... 提示词：{prompt[:70]}{'...' if len(prompt) > 70 else ''}")
+        print(f"种子: {seed} | 步数: {num_steps} | 分辨率: {width}×{height}\n")
+
+        image = pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            height=height,
+            width=width,
+            num_inference_steps=num_steps,
+            guidance_scale=guidance_scale,
+            generator=generator,
+        ).images[0]
+
+        # 保存
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"z-turbo_{seed}_{timestamp}.png"
+        image.save(filename)
+
+        print(f"生成完成！已保存为：{filename}\n")
+
+    except KeyboardInterrupt:
+        print("\n收到中断信号，程序退出～")
+        break
+    except Exception as e:
+        print(f"出错了：{e}")
+        print("请再试一次～\n")
